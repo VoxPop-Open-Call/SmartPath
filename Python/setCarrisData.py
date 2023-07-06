@@ -49,11 +49,7 @@ def downloadZip(extractPath):
 	zipfile.extractall(path = extractPath)
 
 def clearTable(tableName, conn):
-	if(tableName == "StopsInfo"):
-		# Only delete bus entries
-		query = f"DELETE FROM {tableName} WHERE Type='B'"
-	else:
-
+	query = f"DELETE FROM {tableName}"
 	try:
 		cursor = conn.cursor()
 		cursor.execute(query)
@@ -66,11 +62,11 @@ def clearTable(tableName, conn):
 	
 	return True
 
-def setStopsInfo(extractPath, conn, clearedStopsInfo):
-	if not clearedStopsInfo:
-		print("Verifying and setting table StopsInfo")
+def setBusStops(extractPath, conn, clearedBusStops):
+	if not clearedBusStops:
+		print("Verifying and setting table BusStops")
 	else:
-		print("Setting table StopsInfo")
+		print("Setting table BusStops")
 
 	# Read stops file
 	stopsPath = extractPath + "stops.txt"
@@ -99,11 +95,10 @@ def setStopsInfo(extractPath, conn, clearedStopsInfo):
 		tempStop.append(stop_nameArray[iter])
 		tempStop.append(stop_latArray[iter])
 		tempStop.append(stop_lonArray[iter])
-		tempStop.append('B')	#? B for Bus, check schema
 
-		if not clearedStopsInfo:
+		if not clearedBusStops:
 			# Verify if this entry exists in the DB and if it's valid
-			query = "SELECT * FROM StopsInfo WHERE StopID = %s"
+			query = "SELECT * FROM BusStops WHERE StopID = %s"
 			
 			try:
 				cursor = conn.cursor()
@@ -111,16 +106,16 @@ def setStopsInfo(extractPath, conn, clearedStopsInfo):
 				reply = cursor.fetchone()
 				cursor.close()
 			except Error as error:
-				print(f"Error while verifying values for table StopsInfo on row with StopID {tempStop[0]} -> '{error}'")
+				print(f"Error while verifying values for table BusStops on row with StopID {tempStop[0]} -> '{error}'")
 				return False
 
 			if(reply == None):	# Row is not present in the DB, add it
 				stops.append(tempStop)
 				#print(f"Adding row StopID = {tempStop[0]}, StopName = {tempStop[1]}, Latitude = {tempStop[2]}, Longitude = {tempStop[3]}, Type = {tempStop[4]}")
 			else:								# Else, check if it matches the current information
-				if(tempStop[1] != reply[1] or tempStop[2] != reply[2] or tempStop[3] != reply[3] or tempStop[4] != reply[4]):
+				if(tempStop[1] != reply[1] or tempStop[2] != reply[2] or tempStop[3] != reply[3]):
 					# Delete row in DB and insert current one
-					query = "DELETE FROM StopsInfo WHERE StopID = %s"
+					query = "DELETE FROM BusStops WHERE StopID = %s"
 
 					try:
 						cursor = conn.cursor()
@@ -128,7 +123,7 @@ def setStopsInfo(extractPath, conn, clearedStopsInfo):
 						conn.commit()
 						cursor.close()
 					except Error as error:
-						print(f"Error while deleting row with StopID {tempStop[0]} from table StopsInfo -> '{error}'")
+						print(f"Error while deleting row with StopID {tempStop[0]} from table BusStops -> '{error}'")
 						return False
 
 					stops.append(tempStop)
@@ -136,18 +131,18 @@ def setStopsInfo(extractPath, conn, clearedStopsInfo):
 			stops.append(tempStop)
 	
 	# Ready query
-	query = "INSERT INTO StopsInfo (StopID, StopName, Latitude, Longitude, Type) VALUES (%s, %s, %s, %s, %s)"
+	query = "INSERT INTO BusStops (StopID, StopName, Latitude, Longitude) VALUES (%s, %s, %s, %s)"
 
 	# Execute query
 	try:
-		print("Creating query for table StopsInfo")
+		print("Creating query for table BusStops")
 		cursor = conn.cursor()
 		cursor.executemany(query, stops)
 		conn.commit()
-		print("Table StopsInfo set")
+		print("Table BusStops set")
 		cursor.close()
 	except Error as error:
-		print(f"Error while setting values for table StopsInfo -> '{error}'")
+		print(f"Error while setting values for table BusStops -> '{error}'")
 		return False
 	
 	return True
@@ -215,7 +210,7 @@ def setServiceModes(extractPath, conn, clearedServiceModes):
 			else:								# Else, check if it matches the current information
 				if(queryRowTemp[1] != reply[1]):
 					# Delete row in DB and insert current one
-					query = "DELETE FROM StopsInfo WHERE StopID = %s"
+					query = "DELETE FROM BusStops WHERE StopID = %s"
 
 					try:
 						cursor = conn.cursor()
@@ -247,16 +242,16 @@ def setServiceModes(extractPath, conn, clearedServiceModes):
 	
 	return True
 
-def setBusTripsAndBusRouteStops(extractPath, conn, clearedBusTrips, clearedBusRouteStops):
+def setBusTripsAndBusRoutes(extractPath, conn, clearedBusTrips, clearedBusRoutes):
 	if not clearedBusTrips:
 		print("Verifying and setting table BusTrips")
 	else:
 		print("Setting table BusTrips")
 
-	if not clearedBusRouteStops:
-		print("Verifying and setting table BusRouteStops")
+	if not clearedBusRoutes:
+		print("Verifying and setting table BusRoutes")
 	else:
-		print("Setting table BusRouteStops")
+		print("Setting table BusRoutes")
 	print("This step may take a while")
 
 	#* Read routes file
@@ -301,7 +296,7 @@ def setBusTripsAndBusRouteStops(extractPath, conn, clearedBusTrips, clearedBusRo
 	skippedTrips = []
 
 	#? This huge for loop will go through every route and every line on trips.txt
-	#? It will first populate the table BusRouteStops with the stops of each route and then it will populate the table BusTrips with all the trips
+	#? It will first populate the table BusRoutes with the stops of each route and then it will populate the table BusTrips with all the trips
 	for route in routes:
 		#print("-> Checking route", route)
 
@@ -309,7 +304,7 @@ def setBusTripsAndBusRouteStops(extractPath, conn, clearedBusTrips, clearedBusRo
 		matched = False
 
 		#! This step assumes that trips of the same route are grouped together, which seems to be the case
-		# First check skipped trips
+		# First check skipped trips TODO
 
 
 		for rowTrips in linesTrips[tripsPosition:]:
@@ -378,30 +373,31 @@ def setBusTripsAndBusRouteStops(extractPath, conn, clearedBusTrips, clearedBusRo
 									alreadyAddedStops = []
 									alreadyAddedStops.append(int(rowStopTimes[3]))
 									dicStops[f"{index}"] = alreadyAddedStops
-									print("Created entry", index, "in dicStops, and added stop", int(rowStopTimes[3]))
+									#print("Created entry", index, "in dicStops, and added stop", int(rowStopTimes[3]))
 
 							stopTimesRoutesPosition += 1
 					stopsAdded = True
 
 					#? Inserting information like this on the DB will reduce the memory necessity of the server
-					# Insert information into BusRouteStops
-					queryRow = [route, json.dumps(stops)]
+					# Insert information into BusRoutes
+					index = str(route) + str(direction)
+					queryRow = [index, route, json.dumps(stops)]
 					if(int(direction) == '0'):
 						queryRow.append(False)
 					else:
 						queryRow.append(True)
 
-					# Ready query for BusRouteStops
-					queryBusRouteStops = "INSERT INTO BusRouteStops (RouteID, Stops, Direction) VALUES (%s, %s, %s)"
+					# Ready query for BusRoutes
+					queryBusRoutes = "INSERT INTO BusRoutes (RouteDirectionID, RouteID, Stops, Direction) VALUES (%s, %s, %s, %s)"
 
 					# Execute query
 					try:
 						cursor = conn.cursor()
-						cursor.execute(queryBusRouteStops, queryRow)
+						cursor.execute(queryBusRoutes, queryRow)
 						conn.commit()
 						cursor.close()
 					except Error as error:
-						print("Error while setting values for row of RouteID", route, f"on table BusRouteStops -> {error}")
+						print("Error while setting values for row of RouteID", route, f"on table BusRoutes -> {error}")
 						return False
 
 				else:	# Already have stops from this route, skip until next trip
@@ -412,10 +408,10 @@ def setBusTripsAndBusRouteStops(extractPath, conn, clearedBusTrips, clearedBusRo
 							break
 
 
-				#* tempEntry will be [RouteID, RouteService, startingTime]
+				#* tempEntry will be [RouteID, RouteService, stopTimes]
 				tempEntry = []
 				tempEntry.append(route)
-				tempEntry.append(rowTrips[1])
+				tempEntry.append(rowTrips[1]) # TODO YOU WERE HERE
 
 				# Go to trip to get starting time
 				trip = rowTrips[2]
@@ -478,7 +474,7 @@ def setBusTripsAndBusRouteStops(extractPath, conn, clearedBusTrips, clearedBusRo
 					skippedTrips.append(rowTrips)
 			tripsPosition += 1
 
-	print("Tables BusTrips and BusRouteStops set")
+	print("Tables BusTrips and BusRoutes set")
 	return True
 
 def main():
@@ -494,21 +490,28 @@ def main():
 	conn = DBConnection()
 
 	# These variables stop useless verification
-	clearedStopsInfo = False
+	clearedBusStops = False
 	clearedServiceModes = False
 	clearedBusTrips = False
-	clearedBusRouteStops = False
+	clearedBusRoutes = False
+
+	# To exit in case of error
+	endProgram = False
 
 	# Read command line arguments
-	if(len(sys.argv) > 1):
+	numArgs = len(sys.argv) - 1
+	if(numArgs > 1):
 		while True:
+			if endProgram or argIter == numArgs:
+				break
+			
 			argIter = 1
 			if(sys.argv[argIter] == "clear"):
-				for arg in range(argIter + 1, len(sys.argv)):
-					# Clear table StopsInfo
-					if(sys.argv[arg] == "StopsInfo"):
-						if(clearTable("StopsInfo", conn)):
-							clearedStopsInfo = True
+				for arg in range(argIter + 1, numArgs):
+					# Clear table BusStops
+					if(sys.argv[arg] == "BusStops"):
+						if(clearTable("BusStops", conn)):
+							clearedBusStops = True
 						else:
 							break
 
@@ -526,24 +529,27 @@ def main():
 						else:
 							break
 
-					# Clear table BusRouteStops
-					elif(sys.argv[arg] == "BusRouteStops"):
-						if(clearTable("BusRouteStops", conn)):
-							clearedBusRouteStops = True
+					# Clear table BusRoutes
+					elif(sys.argv[arg] == "BusRoutes"):
+						if(clearTable("BusRoutes", conn)):
+							clearedBusRoutes = True
 						else:
 							break
 
+					elif(sys.argv[arg] == "set"):
+						break
+
 					else:
 						print("Unrecognized argument or invalid table ->", sys.argv[arg])
+						endProgram = True
 						break
 			
 			elif(sys.argv[argIter] == "set"):
-				alreadySet = False	# To not set BusTrips and BusRouteStops twice
-				for arg in range(argIter + 1, len(sys.argv)):
-
-					# Set table StopsInfo
-					if(sys.argv[arg] == "StopsInfo"):
-						if not setStopsInfo(extractPath, conn, clearedStopsInfo):
+				alreadySet = False	# To not set BusTrips and BusRoutes twice
+				for arg in range(argIter + 1, numArgs):
+					# Set table BusStops
+					if(sys.argv[arg] == "BusStops"):
+						if not setBusStops(extractPath, conn, clearedBusStops):
 							break
 
 					# Set table ServiceModes
@@ -551,15 +557,19 @@ def main():
 						if not setServiceModes(extractPath, conn, clearedServiceModes):
 							break
 
-					# Set table BusRouteStops and BusTrips
-					elif(sys.argv[arg] == "BusTrips" or sys.argv[arg] == "BusRouteStops"):
+					# Set table BusRoutes and BusTrips
+					elif(sys.argv[arg] == "BusTrips" or sys.argv[arg] == "BusRoutes"):
 						if not alreadySet:
 							alreadySet = True
-							if not setBusTripsAndBusRouteStops(extractPath, conn, clearedBusTrips, clearedBusRouteStops):
+							if not setBusTripsAndBusRoutes(extractPath, conn, clearedBusTrips, clearedBusRoutes):
 								break
+
+					elif(sys.argv[arg] == "set"):
+						break
 
 					else:
 						print("Unrecognized argument or invalid table ->", sys.argv[arg])
+						endProgram = True
 						break
 
 			argIter += 1
