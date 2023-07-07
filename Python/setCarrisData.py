@@ -298,20 +298,19 @@ def setBusTripsAndBusRoutes(extractPath, conn, clearedBusTrips, clearedBusRoutes
 	#? This huge for loop will go through every route and every line on trips.txt
 	#? It will first populate the table BusRoutes with the stops of each route and then it will populate the table BusTrips with all the trips
 	for route in routes:
-		#print("-> Checking route", route)
+		print("-> Checking route", route)
 
 		stopsAdded = False
 		matched = False
 
 		#! This step assumes that trips of the same route are grouped together, which seems to be the case
-		# First check skipped trips TODO
-
-
-		for rowTrips in linesTrips[tripsPosition:]:
-			if(rowTrips[0] == route):  # Match
+		
+		# First check skipped trips
+		for skippedTrip in skippedTrips:
+			if(skippedTrip[0] == route):  # Match
 				matched = True
-				trip = rowTrips[2]
-				direction = rowTrips[4]
+				trip = skippedTrip[2]
+				direction = skippedTrip[4]
 
 				#? Routes in one way may have different stops when compared to the same route in the other way (one way streets and such)
 				
@@ -324,7 +323,7 @@ def setBusTripsAndBusRoutes(extractPath, conn, clearedBusTrips, clearedBusRoutes
 						if(savedIndex == index):	# Match
 							stops = savedStops
 							hadItSaved = True
-							print("Had stops of route", route, "saved in dictionary")
+							print("Had stops of RouteDirectionID", index, "saved")
 							del dicStops[f"{index}"]
 							break
 
@@ -332,27 +331,36 @@ def setBusTripsAndBusRoutes(extractPath, conn, clearedBusTrips, clearedBusRoutes
 						# Go to stop_times and retrieve stops
 						stops = []
 
-						# Append direction of route
-						#stops.append(direction)
-
 						stopsRetrieved = False
 						#? Order of RouteID is not the same in routes.txt and in stop_times.txt
 						for rowStopTimes in linesStopTimes[stopTimesRoutesPosition:]:	
 							if(rowStopTimes[0] == trip):
 								stops.append(int(rowStopTimes[3]))
 								stopsRetrieved = True
-							elif stopsRetrieved:	# Already added, skip route
+							elif stopsRetrieved:	# Already added all stops, skip trip (and route)
 								break
 							else:
 								#print("Tried to find", trip, "and found", rowStopTimes[0])
 								#* Order broke, save next stops on dictionary
 								# Since the program doesn't know to which route the found trip relates to, it needs to do some backtracking
 								tripFound = rowStopTimes[0]
-								for rowTripsBacktrack in linesTrips[1:]:
-									if(rowTripsBacktrack[2] == tripFound):	# Found a match
-										routeBacktrack = rowTripsBacktrack[0]
-										directionBacktrack = rowTripsBacktrack[4]
+
+								found = False
+								# First check skipped trips
+								for skippedTrip in skippedTrips:
+									if(skippedTrip[2] == tripFound):	# Found a match
+										routeBacktrack = skippedTrip[0]
+										directionBacktrack = skippedTrip[4]
+										found = True
 										break
+								
+								# If still not found, check trips.txt
+								if not found:
+									for rowTripsBacktrack in linesTrips[tripsPosition:]:
+										if(rowTripsBacktrack[2] == tripFound):	# Found a match
+											routeBacktrack = rowTripsBacktrack[0]
+											directionBacktrack = rowTripsBacktrack[4]
+											break
 
 								index = str(routeBacktrack) + str(directionBacktrack)
 								# Create new entry in dictionary if it doesn't exist
@@ -397,7 +405,7 @@ def setBusTripsAndBusRoutes(extractPath, conn, clearedBusTrips, clearedBusRoutes
 						conn.commit()
 						cursor.close()
 					except Error as error:
-						print("Error while setting values for row of RouteID", route, f"on table BusRoutes -> {error}")
+						print("Error while setting values for row of RouteDirectionID", index, f"on table BusRoutes -> {error}")
 						return False
 
 				else:	# Already have stops from this route, skip until next trip
@@ -408,6 +416,179 @@ def setBusTripsAndBusRoutes(extractPath, conn, clearedBusTrips, clearedBusRoutes
 							break
 
 
+				#? Now get stop times
+				#* tempEntry will be [RouteID, RouteService, stopTimes]
+				tempEntry = []
+				tempEntry.append(route)
+				tempEntry.append(rowTrips[1]) # TODO YOU WERE HERE
+
+				# Go to trip to get starting time
+				trip = rowTrips[2]
+
+				#* First check if any of the trips there were out of order is the required one
+				hadItSaved = False
+				for savedTrip, savedTime in dicTime.items():
+					if(savedTrip == trip):	# Match
+						tempEntry.append(savedTime)
+						hadItSaved = True
+						print("Had time of trip", trip, "saved in dictionary")
+						del dicTime[f"{trip}"]
+						break
+
+				if not hadItSaved:
+					timeAdded = False
+					#? Order of RouteID is not the same in routes.txt and in stop_times.txt
+					for rowStopTimes in linesStopTimes[stopTimesTimePosition:]: 
+						if(rowStopTimes[0] == trip):  # Match, get starting time if not already added
+							if(len(tempEntry) == 2):
+								time = rowStopTimes[1]	
+								if(int(time[:2]) >= 24):	# Carris thinks the day has 25 hours sometimes
+									timeDiff = 24 - int(time[:2])
+									timeShown = 24 + timeDiff
+									time = time.replace(str(timeShown), str(timeDiff), 1)
+								tempEntry.append(time)
+								timeAdded = True
+						elif timeAdded:	# Already added, next trip
+								break
+						else:
+							#* Order broke, save next starting time in a dictionary
+							# Create new entry in dictionary if it doesn't exist
+							if(rowStopTimes[0] not in dicTime.keys()):
+								print("Added entry to dicTime for trip", rowStopTimes[0], "->", rowStopTimes[1])
+								dicTime[f"{rowStopTimes[0]}"] = rowStopTimes[1]
+						
+						stopTimesTimePosition += 1
+
+				#? Inserting information like this on the DB will reduce the memory necessity of the server
+				# Insert information into BusTrips
+				queryRow = [tempEntry[0], tempEntry[1], tempEntry[2]]
+				
+				# Ready query for BusTrips
+				queryBusTrips = "INSERT INTO BusTrips (RouteID, RouteService, StartingTime) VALUES (%s, %s, %s)"
+
+				# Execute query
+				try:
+					cursor = conn.cursor()
+					cursor.execute(queryBusTrips, queryRow)
+					conn.commit()
+					cursor.close()
+				except Error as error:
+					print("Error while setting values for row of RouteID", tempEntry[0], ", RouteService", tempEntry[1], "and StartingTime", tempEntry[2], f"on table BusTrips -> {error}")
+					return False
+				
+		for rowTrips in linesTrips[tripsPosition:]:
+			if(rowTrips[0] == route):  # Match
+				matched = True
+				trip = rowTrips[2]
+				direction = rowTrips[4]
+
+				#? Routes in one way may have different stops when compared to the same route in the other way (one way streets and such)
+				
+				# Check to see if stops were already added
+				if(stopsAdded == False):		#TODO in two routes of same RouteID but diff direction, program will skip latter
+					#* First check if any of the routes there were out of order is the required one
+					hadItSaved = False
+					index = str(route) + str(direction)
+					for savedIndex, savedStops in dicStops.items():
+						if(savedIndex == index):	# Match
+							stops = savedStops
+							hadItSaved = True
+							print("Had stops of RouteDirectionID", index, "saved")
+							del dicStops[f"{index}"]
+							break
+
+					if not hadItSaved:
+						# Go to stop_times.txt and retrieve stops
+						stops = []
+
+						stopsRetrieved = False
+						#? Order of RouteID is not the same in routes.txt and in stop_times.txt
+						for rowStopTimes in linesStopTimes[stopTimesRoutesPosition:]:	
+							if(rowStopTimes[0] == trip):
+								stops.append(int(rowStopTimes[3]))
+								stopsRetrieved = True
+							elif stopsRetrieved:	# Already added all stops, skip trip (and route)
+								break
+							else:
+								#print("Tried to find", trip, "and found", rowStopTimes[0])
+								#* Order broke, save next stops on dictionary
+								# Since the program doesn't know to which route the found trip relates to, it needs to do some backtracking
+								tripFound = rowStopTimes[0]
+
+								found = False
+								# First check skipped trips
+								for skippedTrip in skippedTrips:
+									if(skippedTrip[2] == tripFound):	# Found a match
+										routeBacktrack = skippedTrip[0]
+										directionBacktrack = skippedTrip[4]
+										found = True
+										break
+								
+								# If still not found, check trips.txt
+								if not found:
+									for rowTripsBacktrack in linesTrips[tripsPosition:]:
+										if(rowTripsBacktrack[2] == tripFound):	# Found a match
+											routeBacktrack = rowTripsBacktrack[0]
+											directionBacktrack = rowTripsBacktrack[4]
+											break
+
+								index = str(routeBacktrack) + str(directionBacktrack)
+								# Create new entry in dictionary if it doesn't exist
+								if(index in dicStops.keys()):
+									alreadyAddedStops = dicStops.get(f"{index}")
+									found = False
+									for stop in alreadyAddedStops:
+										if(stop == int(rowStopTimes[3])):
+											found = True
+											break
+
+									# The first one can appear again in the end (only once)
+									if(not found or (stop == alreadyAddedStops[0] and int(rowStopTimes[4]) != 1 and alreadyAddedStops[-1] != stop)):
+										alreadyAddedStops.append(int(rowStopTimes[3]))
+										dicStops[f"{index}"] = alreadyAddedStops
+										#print("Added stop", int(rowStopTimes[3]), "to dicStops in entry", index)
+								else:
+									alreadyAddedStops = []
+									alreadyAddedStops.append(int(rowStopTimes[3]))
+									dicStops[f"{index}"] = alreadyAddedStops
+									#print("Created entry", index, "in dicStops, and added stop", int(rowStopTimes[3]))
+
+							stopTimesRoutesPosition += 1
+
+					stopsAdded = True
+
+					#? Inserting information like this on the DB will reduce the memory necessity of the server
+					# Insert information into BusRoutes
+					index = str(route) + str(direction)
+					queryRow = [index, route, json.dumps(stops)]
+					if(int(direction) == '0'):
+						queryRow.append(False)
+					else:
+						queryRow.append(True)
+
+					# Ready query for BusRoutes
+					queryBusRoutes = "INSERT INTO BusRoutes (RouteDirectionID, RouteID, Stops, Direction) VALUES (%s, %s, %s, %s)"
+
+					# Execute query
+					try:
+						cursor = conn.cursor()
+						cursor.execute(queryBusRoutes, queryRow)
+						conn.commit()
+						cursor.close()
+					except Error as error:
+						print("Error while setting values for row of RouteDirectionID", index, f"on table BusRoutes -> {error}")
+						return False
+
+				else:	# Already have stops from this route, skip until next trip
+					#! This is assuming same order of trips in trips.txt and in stop_times.txt, which seems to be the case
+					for rowStopTimes in linesStopTimes[stopTimesRoutesPosition:]:
+						if(rowStopTimes[0] == trip):
+							stopTimesRoutesPosition += 1
+						else:
+							break
+
+
+				#? Now get stop times
 				#* tempEntry will be [RouteID, RouteService, stopTimes]
 				tempEntry = []
 				tempEntry.append(route)
@@ -467,11 +648,11 @@ def setBusTripsAndBusRoutes(extractPath, conn, clearedBusTrips, clearedBusRoutes
 					print("Error while setting values for row of RouteID", tempEntry[0], ", RouteService", tempEntry[1], "and StartingTime", tempEntry[2], f"on table BusTrips -> {error}")
 					return False
 
-			else:
-				if matched:	# Already checked everything related to this route
-					break
-				else:				# Save skipped trip
-					skippedTrips.append(rowTrips)
+			elif matched:	# Already checked everything related to this route
+				break
+			else:				# Save skipped trip
+				skippedTrips.append(rowTrips)
+			
 			tripsPosition += 1
 
 	print("Tables BusTrips and BusRoutes set")
